@@ -83,6 +83,7 @@ export interface ClientConfig {
     skipFcmRegistration?: boolean
     logLevel?: keyof typeof LogLevels
     vapidKey?: string
+    heartbeatIntervalMs?: number;
 }
 
 export interface EventChangeCredentials {

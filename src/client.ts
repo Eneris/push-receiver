@@ -8,7 +8,7 @@ import registerFCM from './fcm'
 import Parser from './parser'
 import decrypt from './utils/decrypt'
 import Logger from './utils/logger'
-import Protos from './protos'
+import Protos, { mcs_proto } from './protos'
 
 import { Variables, MCSProtoTag } from './constants';
 
@@ -32,7 +32,8 @@ export default class PushReceiver extends EventEmitter {
     private retryCount = 0
     private retryTimeout: NodeJS.Timeout
     private parser: Parser
-    private persistentIds: Types.PersistentId[]
+    public persistentIds: Types.PersistentId[]
+    private heartbeatTimeout?: NodeJS.Timeout;
 
     constructor(config: Types.ClientConfig) {
         super()
@@ -159,13 +160,30 @@ export default class PushReceiver extends EventEmitter {
         return checkIn(this.config)
     }
 
+    private clearHeartbeatTimeout() {
+        clearTimeout(this.heartbeatTimeout);
+        this.heartbeatTimeout = undefined;
+    }
+
+    private resetHeartbeatTimeout() {
+        this.clearHeartbeatTimeout();
+        if (!this.config.heartbeatIntervalMs)
+            return;
+        this.heartbeatTimeout = setTimeout(() => {
+            Logger.warn('Heartbeat interval elapsed. Forcibly closing socket.');
+            this.socket.destroy();
+        }, this.config.heartbeatIntervalMs * 2);
+    }
+
     private handleSocketConnect = (): void => {
         this.retryCount = 0
         this.emit('ON_CONNECT')
+        this.resetHeartbeatTimeout();
     }
 
     private handleSocketClose = (): void => {
         this.emit('ON_DISCONNECT')
+        this.clearHeartbeatTimeout()
         this.socketRetry()
     }
 
@@ -180,11 +198,33 @@ export default class PushReceiver extends EventEmitter {
         this.retryTimeout = setTimeout(this.connect, timeout)
     }
 
+    private heartbeatAck() {
+        this.socket.write(this.heartbeatBuffer())
+    }
+
+    private heartbeatBuffer() {
+        const HeartbeatAckType = Protos.mcs_proto.HeartbeatAck
+        const heartbeatAck: mcs_proto.IHeartbeatAck = {
+        }
+
+        const errorMessage = HeartbeatAckType.verify(heartbeatAck)
+        if (errorMessage) {
+            throw new Error(errorMessage)
+        }
+
+        const buffer = HeartbeatAckType.encodeDelimited(heartbeatAck).finish()
+
+        return Buffer.concat([
+            Buffer.from([Variables.kMCSVersion, MCSProtoTag.kHeartbeatPingTag]),
+            buffer,
+        ])
+    }
+
     private loginBuffer() {
         const gcm = this.config.credentials.gcm
         const LoginRequestType = Protos.mcs_proto.LoginRequest
         const hexAndroidId = Long.fromString(gcm.androidId).toString(16)
-        const loginRequest = {
+        const loginRequest: mcs_proto.ILoginRequest = {
             adaptiveHeartbeat: false,
             authService: 2,
             authToken: gcm.securityToken,
@@ -198,7 +238,15 @@ export default class PushReceiver extends EventEmitter {
             setting: [{ name: 'new_vc', value: '1' }],
             // Id of the last notification received
             clientEvent: [],
-            receivedPersistentId: this.config.persistentIds
+            receivedPersistentId: this.config.persistentIds,
+        }
+
+        if (this.config.heartbeatIntervalMs) {
+            loginRequest.heartbeatStat = {
+                ip: '',
+                timeout: true,
+                intervalMs: this.config.heartbeatIntervalMs,
+            }
         }
 
         const errorMessage = LoginRequestType.verify(loginRequest)
@@ -215,12 +263,19 @@ export default class PushReceiver extends EventEmitter {
     }
 
     private handleMessage = ({ tag, object }): void => {
+        // any message will reset the client side heartbeat timeout.
+        this.resetHeartbeatTimeout();
+
         if (tag === MCSProtoTag.kLoginResponseTag) {
             // clear persistent ids, as we just sent them to the server while logging in
             this.config.persistentIds = []
             this.emit('ON_READY')
+
+            // this.heartbeat();
         } else if (tag === MCSProtoTag.kDataMessageStanzaTag) {
             this.handleDataMessage(object)
+        } else if (tag === MCSProtoTag.kHeartbeatPingTag) {
+            this.heartbeatAck();
         }
     }
 
@@ -231,23 +286,23 @@ export default class PushReceiver extends EventEmitter {
 
         let message
         try {
-          message = decrypt(object, this.config.credentials.keys)
+            message = decrypt(object, this.config.credentials.keys)
         } catch (error) {
-          switch (true) {
-            case error.message.includes(
-              'Unsupported state or unable to authenticate data'
-            ):
-            case error.message.includes('crypto-key is missing'):
-            case error.message.includes('salt is missing'):
-              // NOTE(ibash) Periodically we're unable to decrypt notifications. In
-              // all cases we've been able to receive future notifications using the
-              // same keys. So, we silently drop this notification.
-              console.warn('Message dropped as it could not be decrypted: ' + error.message)
-              return
-            default: {
-              throw error
+            switch (true) {
+                case error.message.includes(
+                    'Unsupported state or unable to authenticate data'
+                ):
+                case error.message.includes('crypto-key is missing'):
+                case error.message.includes('salt is missing'):
+                    // NOTE(ibash) Periodically we're unable to decrypt notifications. In
+                    // all cases we've been able to receive future notifications using the
+                    // same keys. So, we silently drop this notification.
+                    console.warn('Message dropped as it could not be decrypted: ' + error.message)
+                    return
+                default: {
+                    throw error
+                }
             }
-          }
         }
 
         // Maintain persistentIds updated with the very last received value
