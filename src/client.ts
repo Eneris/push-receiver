@@ -46,6 +46,8 @@ export default class PushReceiver extends Emitter<ClientEvents> {
     #streamId = 0
     #lastStreamIdReported = -1
 
+    #socketCloseListener = () => this.#handleSocketClose()
+
     persistentIds: Types.PersistentId[]
 
     get fcmToken() {
@@ -99,7 +101,7 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         this.#socket = new tls.TLSSocket(null)
         this.#socket.setKeepAlive(true)
         this.#socket.on('connect', () => this.#handleSocketConnect())
-        this.#socket.on('close', () => this.#handleSocketClose())
+        this.#socket.on('close', this.#socketCloseListener)
         this.#socket.on('error', (err) => this.#handleSocketError(err))
         this.#socket.connect({ host: HOST, port: PORT })
 
@@ -122,8 +124,10 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         this.#clearHeartbeat()
 
         if (this.#socket) {
+            this.#socket.removeListener('close', this.#socketCloseListener)
             this.#socket.destroy()
             this.#socket = null
+            this.emit('ON_DISCONNECT')
         }
 
         if (this.#parser) {
