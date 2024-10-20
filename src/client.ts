@@ -194,6 +194,10 @@ export default class PushReceiver extends Emitter<ClientEvents> {
 
     #clearReady() {
         if (!this.#ready.isResolved) {
+            // Catch error to avoid unhandled rejection warning
+            this.#ready.promise.catch((error) => {
+                Logger.error(error)
+            })
             this.#ready.reject(new Error('Client destroyed'))
         }
 
@@ -234,10 +238,18 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         // ignore, the close handler takes care of retry
     }
 
-    #socketRetry() {
+    async #socketRetry() {
         this.destroy()
         const timeout = Math.min(++this.#retryCount, MAX_RETRY_TIMEOUT) * 1000
-        this.#retryTimeout = setTimeout(() => this.connect(), timeout)
+        try {
+            await this.connect()
+        }
+        catch (error) {
+            Logger.error('Connection failed, retrying in', timeout / 1000, 'seconds...', error)
+            this.#retryTimeout = setTimeout(() => {
+                this.#socketRetry(); // Retry after the calculated timeout, no need to await
+            }, timeout)
+        }
     }
 
     #getStreamId(): number {
