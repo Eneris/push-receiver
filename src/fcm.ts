@@ -27,24 +27,39 @@ function encodeBase64URL(value: string): string {
     return String(value).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
 }
 
-// TODO: Installation token expires after 7 days. It should be refreshed but requests are failing (404)
-// export async function refreshFCMInstallationToken(fcmData: Types.FcmData, config: Types.ClientConfig) {
-//     const response = await request(getEndpoint(config, FCM_INSTALLATION, `${fcmData.fid}/authTokens:generate`), {
-//         method: 'POST',
-//         headers: new Headers({
-//             Authorization: `${AUTH_VERSION} ${fcmData.refreshToken}`,
-//             'x-firebase-client': getEmptyHeatbeat(),
-//         }),
-//         body: JSON.stringify({
-//             installation: {
-//                 sdkVersion: SDK_VERSION,
-//                 appId: config.firebase.appId,
-//             }
-//         })
-//     })
-//     const data = await response.json()
-//     return data
-// }
+/**
+ * Refreshes the FCM installation token using the refresh token.
+ * The installation token expires after 7 days and needs to be refreshed.
+ * Based on the fix from https://github.com/Eneris/push-receiver/issues/27
+ */
+export async function refreshFCMInstallationToken(fcmData: Types.FcmData, config: Types.ClientConfig): Promise<Types.InstallationData> {
+    const url = `projects/${config.firebase.projectId}/installations/${fcmData.installation.fid}/authTokens:generate`
+
+    const response = await request(getEndpoint(config, FCM_INSTALLATION, url), {
+        method: 'POST',
+        headers: {
+            'Authorization': `${AUTH_VERSION} ${fcmData.installation.refreshToken}`,
+            'x-firebase-client': getEmptyHeatbeat(),
+            'x-goog-api-key': config.firebase.apiKey,
+        },
+        body: JSON.stringify({
+            installation: {
+                sdkVersion: SDK_VERSION,
+                appId: config.firebase.appId,
+            }
+        })
+    })
+
+    const data = await response.json() as Types.FcmInstallationResponse
+
+    return {
+        token: data.authToken.token,
+        createdAt: (new Date()).getTime(), // in ms
+        expiresIn: Number.parseInt(data.authToken.expiresIn) * 1000, // in ms
+        refreshToken: fcmData.installation.refreshToken, // Keep the same refresh token
+        fid: fcmData.installation.fid, // Keep the same FID
+    }
+}
 
 export async function installFCM(config: Types.ClientConfig): Promise<Types.InstallationData> {
     const response = await request(getEndpoint(config, FCM_INSTALLATION, 'installations'), {

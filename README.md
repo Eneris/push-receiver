@@ -94,28 +94,44 @@ import { PushReceiver } from '@eneris/push-receiver'
 
 ### Token Management
 
-The library provides methods to manually refresh or delete FCM tokens when needed:
+The library provides methods to manage FCM tokens and handle token expiration:
 
 #### Refresh Token
 
-Use `refreshToken()` to force a complete re-registration and obtain a new FCM token. This is useful when a token stops receiving notifications:
+Use `refreshToken()` to refresh the FCM installation auth token. The installation token expires after 7 days and should be refreshed periodically. This method uses the existing refresh token to obtain a new installation auth token without generating new encryption keys or changing the Firebase Installation ID (FID).
 
 ```javascript
-// Force refresh the FCM token
-const newCredentials = await instance.refreshToken()
-console.log('New FCM token:', newCredentials.fcm.token)
+// Refresh the FCM installation token (should be done before it expires after 7 days)
+const updatedCredentials = await instance.refreshToken()
+console.log('Installation token refreshed, expires in:', updatedCredentials.fcm.installation.expiresIn / 1000 / 60 / 60 / 24, 'days')
 
 // The onCredentialsChanged listener will also be triggered
+// Save the updated credentials for future use
+```
+
+**Best Practice:** Check if the installation token is about to expire and refresh it proactively:
+
+```javascript
+const credentials = instance.config.credentials
+if (credentials?.fcm?.installation) {
+    const expiresAt = credentials.fcm.installation.createdAt + credentials.fcm.installation.expiresIn
+    const daysUntilExpiry = (expiresAt - Date.now()) / (1000 * 60 * 60 * 24)
+
+    if (daysUntilExpiry < 1) {
+        // Refresh token if it expires in less than 1 day
+        await instance.refreshToken()
+    }
+}
 ```
 
 #### Delete Token
 
-Use `deleteToken()` to invalidate the current token. You'll need to call `connect()` again to get a new token:
+Use `deleteToken()` to clear locally stored credentials. This does NOT revoke the token on FCM servers—it only resets the local state. If the client is connected, it will automatically disconnect first.
 
 ```javascript
-// Delete the current token
+// Delete the current token and disconnect
 instance.deleteToken()
 
-// Reconnect to get a new token
+// Connect again to perform a full re-registration with new credentials
 await instance.connect()
 ```

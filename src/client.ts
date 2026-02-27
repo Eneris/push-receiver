@@ -2,7 +2,7 @@ import Long from 'long'
 import ProtobufJS from 'protobufjs'
 import tls from 'tls'
 import registerGCM, { checkIn } from './gcm'
-import registerFCM from './fcm'
+import registerFCM, { refreshFCMInstallationToken } from './fcm'
 import createKeys from './keys'
 import Parser from './parser'
 import decrypt from './utils/decrypt'
@@ -164,35 +164,84 @@ export default class PushReceiver extends Emitter<ClientEvents> {
     }
 
     /**
-     * Deletes the current FCM token and clears credentials.
-     * This invalidates the current registration. Call connect() again to get a new token.
+     * Clears the locally stored credentials, including the current FCM token reference.
+     *
+     * This does NOT revoke or delete the token on FCM/GCM servers; it only resets the
+     * local registration state. If the client is currently connected, this will first
+     * disconnect and destroy the existing connection.
+     *
+     * Call connect() again to register and obtain a new FCM token.
      */
     deleteToken(): void {
+        const wasConnected = !!this.#socket
+
+        if (wasConnected) {
+            // Ensure no further messages are processed with invalidated credentials
+            this.destroy()
+        }
+
         const oldCredentials = this.#config.credentials
         this.#config.credentials = undefined
 
         if (oldCredentials) {
-            Logger.debug('Token deleted')
+            if (wasConnected) {
+                Logger.debug('Token deleted and existing connection destroyed')
+            } else {
+                Logger.debug('Token deleted')
+            }
         }
     }
 
     /**
-     * Forces a refresh of the FCM token by clearing existing credentials and re-registering.
-     * This will generate new encryption keys and obtain a new FCM token.
-     * Emits ON_CREDENTIALS_CHANGE event with the new credentials.
+     * Refreshes the FCM installation token using the existing refresh token.
+     * This refreshes the installation auth token that expires after 7 days, without
+     * generating new encryption keys or performing a full re-registration.
      *
-     * @returns Promise that resolves with the new credentials
+     * This is the proper way to refresh tokens and maintains the same Firebase Installation ID (FID).
+     * Emits ON_CREDENTIALS_CHANGE event with the updated credentials.
+     *
+     * @returns Promise that resolves with the updated credentials
+     * @throws Error if no existing credentials are found or if the refresh fails
      */
     async refreshToken(): Promise<Types.Credentials> {
-        Logger.debug('Refreshing FCM token')
+        if (!this.#config.credentials?.fcm) {
+            throw new Error('No existing credentials to refresh. Call connect() first to obtain initial credentials.')
+        }
 
-        this.#config.credentials = undefined
+        Logger.debug('Refreshing FCM installation token')
 
-        const newCredentials = await this.registerIfNeeded()
+        const oldCredentials = this.#config.credentials
 
-        Logger.debug('FCM token refreshed')
+        try {
+            // Refresh the installation token using the refresh token
+            const newInstallation = await refreshFCMInstallationToken(
+                oldCredentials.fcm,
+                this.#config
+            )
 
-        return newCredentials
+            // Update credentials with new installation token
+            const newCredentials: Types.Credentials = {
+                ...oldCredentials,
+                fcm: {
+                    ...oldCredentials.fcm,
+                    installation: newInstallation
+                }
+            }
+
+            this.#config.credentials = newCredentials
+
+            this.emit('ON_CREDENTIALS_CHANGE', {
+                oldCredentials,
+                newCredentials
+            })
+
+            Logger.debug('FCM installation token refreshed')
+
+            return newCredentials
+        } catch (error) {
+            Logger.error('Failed to refresh FCM installation token:', error)
+            throw error
+        }
     }
 
     async registerIfNeeded(): Promise<Types.Credentials> {
