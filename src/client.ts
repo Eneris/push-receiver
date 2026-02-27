@@ -44,6 +44,7 @@ export default class PushReceiver extends Emitter<ClientEvents> {
     #parser: Parser
     #heartbeatTimer?: NodeJS.Timeout
     #heartbeatTimeout?: NodeJS.Timeout
+    #tokenRefreshTimer?: NodeJS.Timeout
     #streamId = 0
     #lastStreamIdReported = -1
     #ready = defer()
@@ -128,6 +129,7 @@ export default class PushReceiver extends Emitter<ClientEvents> {
 
         clearTimeout(this.#retryTimeout)
         this.#clearHeartbeat()
+        this.#clearTokenRefresh()
 
         if (this.#socket) {
             this.#socket.removeAllListeners()
@@ -200,6 +202,9 @@ export default class PushReceiver extends Emitter<ClientEvents> {
      * This is the proper way to refresh tokens and maintains the same Firebase Installation ID (FID).
      * Emits ON_CREDENTIALS_CHANGE event with the updated credentials.
      *
+     * Note: The client automatically refreshes tokens before expiration. This method
+     * is exposed for manual refresh if needed, but typically automatic refresh handles this.
+     *
      * @returns Promise that resolves with the updated credentials
      * @throws Error if no existing credentials are found or if the refresh fails
      */
@@ -237,6 +242,9 @@ export default class PushReceiver extends Emitter<ClientEvents> {
 
             Logger.debug('FCM installation token refreshed')
 
+            // Reschedule automatic token refresh for the new token
+            this.#scheduleTokenRefresh()
+
             return newCredentials
         } catch (error) {
             Logger.error('Failed to refresh FCM installation token:', error)
@@ -247,6 +255,9 @@ export default class PushReceiver extends Emitter<ClientEvents> {
     async registerIfNeeded(): Promise<Types.Credentials> {
         if (this.checkCredentials(this.#config.credentials)) {
             await checkIn(this.#config)
+
+            // Schedule automatic token refresh for existing credentials
+            this.#scheduleTokenRefresh()
 
             return this.#config.credentials
         }
@@ -270,6 +281,9 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         this.#config.credentials = credentials
 
         Logger.debug('got credentials', credentials)
+
+        // Schedule automatic token refresh
+        this.#scheduleTokenRefresh()
 
         return this.#config.credentials
     }
@@ -297,6 +311,39 @@ export default class PushReceiver extends Emitter<ClientEvents> {
 
         this.#heartbeatTimer = setTimeout(() => this.#sendHeartbeatPing(), this.#config.heartbeatIntervalMs)
         this.#heartbeatTimeout = setTimeout(() => this.#socketRetry(), this.#config.heartbeatIntervalMs * 2)
+    }
+
+    #clearTokenRefresh() {
+        clearTimeout(this.#tokenRefreshTimer)
+        this.#tokenRefreshTimer = undefined
+    }
+
+    #scheduleTokenRefresh() {
+        this.#clearTokenRefresh()
+
+        if (!this.#config.credentials?.fcm?.installation) return
+
+        const { createdAt, expiresIn } = this.#config.credentials.fcm.installation
+        const expiresAt = createdAt + expiresIn
+        const now = Date.now()
+
+        // Refresh token 1 day before expiration (or immediately if already expired)
+        const refreshIn = Math.max(0, expiresAt - now - (24 * 60 * 60 * 1000))
+
+        Logger.debug(`Scheduling token refresh in ${refreshIn / 1000 / 60 / 60} hours`)
+
+        this.#tokenRefreshTimer = setTimeout(async () => {
+            try {
+                Logger.debug('Automatic token refresh triggered')
+                await this.refreshToken()
+                // Schedule next refresh after successful refresh
+                this.#scheduleTokenRefresh()
+            } catch (error) {
+                Logger.error('Automatic token refresh failed:', error)
+                // Retry in 1 hour
+                this.#tokenRefreshTimer = setTimeout(() => this.#scheduleTokenRefresh(), 60 * 60 * 1000)
+            }
+        }, refreshIn)
     }
 
     #handleSocketConnect = (): void => {

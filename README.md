@@ -94,39 +94,40 @@ import { PushReceiver } from '@eneris/push-receiver'
 
 ### Token Management
 
-The library provides methods to manage FCM tokens and handle token expiration:
+The library automatically manages FCM installation token lifecycle and handles token expiration:
 
-#### Refresh Token
+#### Automatic Token Refresh
 
-Use `refreshToken()` to refresh the FCM installation auth token. The installation token expires after 7 days and should be refreshed periodically. This method uses the existing refresh token to obtain a new installation auth token without generating new encryption keys or changing the Firebase Installation ID (FID).
+The client automatically refreshes the FCM installation auth token before it expires (1 day before the 7-day expiration). When a token is refreshed, the `onCredentialsChanged` event is emitted with the updated credentials.
 
 ```javascript
-// Refresh the FCM installation token (should be done before it expires after 7 days)
-const updatedCredentials = await instance.refreshToken()
-console.log('Installation token refreshed, expires in:', updatedCredentials.fcm.installation.expiresIn / 1000 / 60 / 60 / 24, 'days')
-
-// The onCredentialsChanged listener will also be triggered
-// Save the updated credentials for future use
+// Listen for automatic token refresh
+instance.onCredentialsChanged(({ oldCredentials, newCredentials }) => {
+    console.log('Credentials updated (automatic refresh or new registration)')
+    // Save the updated credentials for future use
+    saveCredentials(newCredentials)
+})
 ```
 
-**Best Practice:** Check if the installation token is about to expire and refresh it proactively:
+The automatic refresh:
+- Maintains the same Firebase Installation ID (FID) and encryption keys
+- Refreshes only the installation auth token (which expires after 7 days)
+- Emits `ON_CREDENTIALS_CHANGE` event when completed
+- Automatically schedules the next refresh cycle
+
+#### Manual Token Refresh
+
+You can also manually trigger a token refresh if needed:
 
 ```javascript
-const credentials = instance.config.credentials
-if (credentials?.fcm?.installation) {
-    const expiresAt = credentials.fcm.installation.createdAt + credentials.fcm.installation.expiresIn
-    const daysUntilExpiry = (expiresAt - Date.now()) / (1000 * 60 * 60 * 24)
-
-    if (daysUntilExpiry < 1) {
-        // Refresh token if it expires in less than 1 day
-        await instance.refreshToken()
-    }
-}
+// Manually refresh the FCM installation token
+const updatedCredentials = await instance.refreshToken()
+console.log('Installation token refreshed, expires in:', updatedCredentials.fcm.installation.expiresIn / 1000 / 60 / 60 / 24, 'days')
 ```
 
 #### Delete Token
 
-Use `deleteToken()` to clear locally stored credentials. This does NOT revoke the token on FCM servers—it only resets the local state. If the client is connected, it will automatically disconnect first.
+Use `deleteToken()` to clear locally stored credentials and perform a full re-registration. This does NOT revoke the token on FCM servers—it only resets the local state. If the client is connected, it will automatically disconnect first.
 
 ```javascript
 // Delete the current token and disconnect
