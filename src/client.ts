@@ -195,6 +195,8 @@ export default class PushReceiver extends Emitter<ClientEvents> {
 
     #clearReady() {
         if (!this.#ready.isResolved) {
+            // Attach a catch handler to prevent unhandled rejection warning
+            this.#ready.promise.catch(() => {})
             this.#ready.reject(new Error('Client destroyed'))
         }
 
