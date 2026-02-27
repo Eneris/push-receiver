@@ -91,3 +91,31 @@ import { PushReceiver } from '@eneris/push-receiver'
     instance.destroy()
 })()
 ```
+
+### Token Management
+
+The library provides methods to manually refresh or delete FCM tokens when needed:
+
+#### Refresh Token
+
+Use `refreshToken()` to force a complete re-registration and obtain a new FCM token. This is useful when a token stops receiving notifications:
+
+```javascript
+// Force refresh the FCM token
+const newCredentials = await instance.refreshToken()
+console.log('New FCM token:', newCredentials.fcm.token)
+
+// The onCredentialsChanged listener will also be triggered
+```
+
+#### Delete Token
+
+Use `deleteToken()` to invalidate the current token. You'll need to call `connect()` again to get a new token:
+
+```javascript
+// Delete the current token
+instance.deleteToken()
+
+// Reconnect to get a new token
+await instance.connect()
+```
