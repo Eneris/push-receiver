@@ -422,11 +422,28 @@ export default class PushReceiver extends Emitter<ClientEvents> {
             }
         }
 
+        const { data: appDataPayload, notification: appNotificationPayload } = this.#extractAppData(object.appData)
+        const messagePayload: Types.Message = (typeof message === 'object' && message !== null ? message : {}) as Types.Message
+
+        if (Object.keys(appDataPayload).length > 0) {
+            messagePayload.data = {
+                ...appDataPayload,
+                ...messagePayload.data,
+            }
+        }
+
+        if (Object.keys(appNotificationPayload).length > 0) {
+            messagePayload.notification = {
+                ...appNotificationPayload,
+                ...messagePayload.notification,
+            }
+        }
+
         // Maintain persistentIds updated with the very last received value
         this.persistentIds.push(object.persistentId)
         // Send notification
         this.emit('ON_MESSAGE_RECEIVED', {
-            message,
+            message: messagePayload,
             // Needs to be saved by the client
             persistentId: object.persistentId,
         })
@@ -435,6 +452,29 @@ export default class PushReceiver extends Emitter<ClientEvents> {
     #handleParserError = (error) => {
         Logger.error(error)
         this.#socketRetry()
+    }
+
+    #extractAppData(appData: Array<{ key?: string, value?: string }> = []) {
+        const data: Record<string, string> = {}
+        const notification: Partial<Types.Notification> = {}
+
+        for (const item of appData) {
+            if (!item?.key || item.value === undefined) continue
+
+            if (item.key === 'crypto-key' || item.key === 'encryption') continue
+
+            if (item.key.startsWith('gcm.notification.')) {
+                const notificationKey = item.key.slice('gcm.notification.'.length)
+                if (notificationKey) {
+                    notification[notificationKey] = item.value
+                }
+                continue
+            }
+
+            data[item.key] = item.value
+        }
+
+        return { data, notification }
     }
 }
 
