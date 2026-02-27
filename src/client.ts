@@ -336,8 +336,7 @@ export default class PushReceiver extends Emitter<ClientEvents> {
             try {
                 Logger.debug('Automatic token refresh triggered')
                 await this.refreshToken()
-                // Schedule next refresh after successful refresh
-                this.#scheduleTokenRefresh()
+                // refreshToken() already calls #scheduleTokenRefresh() on success
             } catch (error) {
                 Logger.error('Automatic token refresh failed:', error)
                 // Retry in 1 hour

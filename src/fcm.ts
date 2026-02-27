@@ -33,7 +33,7 @@ function encodeBase64URL(value: string): string {
  * Based on the fix from https://github.com/Eneris/push-receiver/issues/27
  */
 export async function refreshFCMInstallationToken(fcmData: Types.FcmData, config: Types.ClientConfig): Promise<Types.InstallationData> {
-    const url = `projects/${config.firebase.projectId}/installations/${fcmData.installation.fid}/authTokens:generate`
+    const url = `installations/${fcmData.installation.fid}/authTokens:generate`
 
     const response = await request(getEndpoint(config, FCM_INSTALLATION, url), {
         method: 'POST',
