@@ -163,6 +163,38 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         return true
     }
 
+    /**
+     * Deletes the current FCM token and clears credentials.
+     * This invalidates the current registration. Call connect() again to get a new token.
+     */
+    deleteToken(): void {
+        const oldCredentials = this.#config.credentials
+        this.#config.credentials = undefined
+
+        if (oldCredentials) {
+            Logger.debug('Token deleted')
+        }
+    }
+
+    /**
+     * Forces a refresh of the FCM token by clearing existing credentials and re-registering.
+     * This will generate new encryption keys and obtain a new FCM token.
+     * Emits ON_CREDENTIALS_CHANGE event with the new credentials.
+     *
+     * @returns Promise that resolves with the new credentials
+     */
+    async refreshToken(): Promise<Types.Credentials> {
+        Logger.debug('Refreshing FCM token')
+
+        this.#config.credentials = undefined
+
+        const newCredentials = await this.registerIfNeeded()
+
+        Logger.debug('FCM token refreshed')
+
+        return newCredentials
+    }
+
     async registerIfNeeded(): Promise<Types.Credentials> {
         if (this.checkCredentials(this.#config.credentials)) {
             await checkIn(this.#config)
