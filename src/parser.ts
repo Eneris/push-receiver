@@ -109,18 +109,25 @@ export default class Parser extends Emitter<ParserEvents> {
             switch (this.#state) {
                 case ProcessingState.MCS_VERSION_TAG_AND_SIZE:
                     this.#handleGotVersion()
+                    if (this.#destroyed || this.#isWaitingForData) return
                     this.#handleGotMessageTag()
+                    if (this.#destroyed || this.#isWaitingForData) return
                     this.#handleGotMessageSize()
+                    if (this.#destroyed || this.#isWaitingForData) return
                     break
                 case ProcessingState.MCS_TAG_AND_SIZE:
                     this.#handleGotMessageTag()
+                    if (this.#destroyed || this.#isWaitingForData) return
                     this.#handleGotMessageSize()
+                    if (this.#destroyed || this.#isWaitingForData) return
                     break
                 case ProcessingState.MCS_SIZE:
                     this.#handleGotMessageSize()
+                    if (this.#destroyed || this.#isWaitingForData) return
                     break
                 case ProcessingState.MCS_PROTO_BYTES:
                     this.#handleGotMessageBytes()
+                    if (this.#destroyed || this.#isWaitingForData) return
                     break
                 default:
                     this.#emitError(new Error(`Unexpected state: ${this.#state}`))
