@@ -420,7 +420,7 @@ export default class PushReceiver extends Emitter<ClientEvents> {
                     // NOTE(ibash) Periodically we're unable to decrypt notifications. In
                     // all cases we've been able to receive future notifications using the
                     // same keys. So, we silently drop this notification.
-                    Logger.warn('Message dropped as it could not be decrypted: ' + error.message)
+                    Logger.debug('Message dropped as it could not be decrypted: ' + error.message)
                     return
                 default:
                     throw error
