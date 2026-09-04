@@ -27,24 +27,45 @@ function encodeBase64URL(value: string): string {
     return String(value).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
 }
 
-// TODO: Installation token expires after 7 days. It should be refreshed but requests are failing (404)
-// export async function refreshFCMInstallationToken(fcmData: Types.FcmData, config: Types.ClientConfig) {
-//     const response = await request(getEndpoint(config, FCM_INSTALLATION, `${fcmData.fid}/authTokens:generate`), {
-//         method: 'POST',
-//         headers: new Headers({
-//             Authorization: `${AUTH_VERSION} ${fcmData.refreshToken}`,
-//             'x-firebase-client': getEmptyHeatbeat(),
-//         }),
-//         body: JSON.stringify({
-//             installation: {
-//                 sdkVersion: SDK_VERSION,
-//                 appId: config.firebase.appId,
-//             }
-//         })
-//     })
-//     const data = await response.json()
-//     return data
-// }
+// The installation auth token is only valid for 7 days, so it has to be
+// refreshed before it can be used for another FCM registration. Refresh a bit
+// early so a token that is about to expire is not sent with the next request.
+const INSTALLATION_REFRESH_MARGIN = 60 * 60 * 1000 // in ms
+
+export function isInstallationTokenExpired(installation: Types.InstallationData, margin = INSTALLATION_REFRESH_MARGIN): boolean {
+    if (!installation.createdAt || !installation.expiresIn) return true
+
+    return installation.createdAt + installation.expiresIn - margin <= Date.now()
+}
+
+export async function refreshFCMInstallationToken(installation: Types.InstallationData, config: Types.ClientConfig): Promise<Types.InstallationData> {
+    // The FIS endpoint for this is projects/<projectId>/installations/<fid>/authTokens:generate.
+    // Omitting the `installations/` segment is what made the previous
+    // implementation fail with a 404 (see #27).
+    const response = await request(getEndpoint(config, FCM_INSTALLATION, `installations/${installation.fid}/authTokens:generate`), {
+        method: 'POST',
+        headers: {
+            Authorization: `${AUTH_VERSION} ${installation.refreshToken}`,
+            'x-firebase-client': getEmptyHeatbeat(),
+            'x-goog-api-key': config.firebase.apiKey,
+        },
+        body: JSON.stringify({
+            installation: {
+                sdkVersion: SDK_VERSION,
+                appId: config.firebase.appId,
+            }
+        })
+    })
+
+    const data = await response.json() as Types.FcmInstallationAuthTokenResponse
+
+    return {
+        ...installation,
+        token: data.token,
+        createdAt: (new Date()).getTime(), // in ms
+        expiresIn: Number.parseInt(data.expiresIn) * 1000, // in ms
+    }
+}
 
 export async function installFCM(config: Types.ClientConfig): Promise<Types.InstallationData> {
     const response = await request(getEndpoint(config, FCM_INSTALLATION, 'installations'), {
