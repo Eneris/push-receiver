@@ -2,7 +2,7 @@ import Long from 'long'
 import ProtobufJS from 'protobufjs'
 import tls from 'tls'
 import registerGCM, { checkIn } from './gcm'
-import registerFCM from './fcm'
+import registerFCM, { isInstallationTokenExpired, refreshFCMInstallationToken } from './fcm'
 import createKeys from './keys'
 import Parser from './parser'
 import decrypt from './utils/decrypt'
@@ -172,7 +172,7 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         if (this.checkCredentials(this.#config.credentials)) {
             await checkIn(this.#config)
 
-            return this.#config.credentials
+            return this.#refreshInstallationIfNeeded(this.#config.credentials)
         }
 
         const keys = await createKeys()
@@ -194,6 +194,43 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         this.#config.credentials = credentials
 
         return this.#config.credentials
+    }
+
+    // Persisted credentials keep working for MCS, but their installation auth
+    // token expires after 7 days. Refresh it so a later registration call does
+    // not fail with an expired token.
+    async #refreshInstallationIfNeeded(credentials: Types.Credentials): Promise<Types.Credentials> {
+        if (!isInstallationTokenExpired(credentials.fcm.installation)) {
+            return credentials
+        }
+
+        try {
+            const installation = await refreshFCMInstallationToken(credentials.fcm.installation, this.#config)
+            const newCredentials: Types.Credentials = {
+                ...credentials,
+                fcm: {
+                    ...credentials.fcm,
+                    installation,
+                },
+            }
+
+            this.emit('ON_CREDENTIALS_CHANGE', {
+                oldCredentials: credentials,
+                newCredentials
+            })
+
+            this.#config.credentials = newCredentials
+
+            Logger.debug('refreshed expired FCM installation token')
+
+            return newCredentials
+        } catch (error) {
+            // Keep the existing credentials: they are still usable for
+            // receiving messages, only a re-registration would fail.
+            Logger.warn('Failed to refresh FCM installation token', error)
+
+            return credentials
+        }
     }
 
     #clearReady() {
