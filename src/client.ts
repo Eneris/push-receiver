@@ -16,8 +16,6 @@ import { Variables, MCSProtoTag } from './constants'
 
 import type * as Types from './types'
 
-const REDACTED = '[redacted]'
-
 export {
     Types
 }
@@ -37,31 +35,6 @@ interface ClientEvents {
     ON_READY: (data: void) => void
     ON_HEARTBEAT: (data: void) => void
 }
-
-// Credentials grant access to the push channel, so keep the secret parts out
-// of the log. What is left is enough to tell registrations apart and to see
-// when the installation token expires.
-const redactCredentials = (credentials: Types.Credentials) => ({
-    keys: {
-        privateKey: REDACTED,
-        publicKey: credentials.keys.publicKey,
-        authSecret: REDACTED,
-    },
-    gcm: {
-        ...credentials.gcm,
-        token: REDACTED,
-        securityToken: REDACTED,
-    },
-    fcm: {
-        token: REDACTED,
-        installation: {
-            ...credentials.fcm.installation,
-            token: REDACTED,
-            refreshToken: REDACTED,
-        },
-    },
-    config: credentials.config,
-})
 
 export default class PushReceiver extends Emitter<ClientEvents> {
     #config: Types.ClientConfig
@@ -214,8 +187,6 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         })
 
         this.#config.credentials = credentials
-
-        Logger.debug('got credentials', redactCredentials(credentials))
 
         return this.#config.credentials
     }
