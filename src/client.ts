@@ -103,7 +103,12 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         this.#lastStreamIdReported = -1
 
         this.#socket = new tls.TLSSocket(null)
-        this.#socket.setKeepAlive(true)
+        // Probe after 30s idle instead of the OS default (7200s on Linux).
+        // Without an explicit initialDelay, half-open connections caused by
+        // residential NAT aging go undetected for 2+ hours. 30s makes a
+        // stalled socket trigger 'error'/'close' → existing retry logic
+        // within ~60-90s.
+        this.#socket.setKeepAlive(true, 30_000)
         this.#socket.on('connect', () => this.#handleSocketConnect())
         this.#socket.on('close', () => this.#handleSocketClose())
         this.#socket.on('error', (err) => this.#handleSocketError(err))
@@ -415,7 +420,7 @@ export default class PushReceiver extends Emitter<ClientEvents> {
                     // NOTE(ibash) Periodically we're unable to decrypt notifications. In
                     // all cases we've been able to receive future notifications using the
                     // same keys. So, we silently drop this notification.
-                    Logger.warn('Message dropped as it could not be decrypted: ' + error.message)
+                    Logger.debug('Message dropped as it could not be decrypted: ' + error.message)
                     return
                 default:
                     throw error
