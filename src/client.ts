@@ -193,8 +193,6 @@ export default class PushReceiver extends Emitter<ClientEvents> {
 
         this.#config.credentials = credentials
 
-        Logger.debug('got credentials', credentials)
-
         return this.#config.credentials
     }
 
