@@ -47,6 +47,11 @@ export interface FcmRegistrationResponse {
     }
 }
 
+export interface FcmInstallationAuthTokenResponse {
+    expiresIn: string
+    token: string
+}
+
 export interface FcmInstallationResponse {
     authToken: {
         expiresIn: string
