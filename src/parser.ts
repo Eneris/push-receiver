@@ -155,7 +155,7 @@ export default class Parser extends Emitter<ParserEvents> {
         // above to be mid-packet like: new ProtobufJS.BufferReader(this.#data.slice(0, 1))
         if (incompleteSizePacket) {
             this.#state = ProcessingState.MCS_SIZE
-            this.#waitForData()
+            this.#isWaitingForData = true
             return
         }
 
