@@ -12,6 +12,10 @@ const SDK_VERSION = 'w:0.6.6'
 // TODO: FIXME it is optional to send it but better to implement proper heatbeat in the future
 const getEmptyHeatbeat = () => btoa(JSON.stringify({ heartbeats: [], version: 2 })).toString()
 
+function encodeBase64URL(value: string): string {
+    return String(value).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+}
+
 function generateFirebaseFID() {
     // A valid FID has exactly 22 base64 characters, which is 132 bits, or 16.5
     // bytes. our implementation generates a 17 byte array instead.
@@ -20,16 +24,15 @@ function generateFirebaseFID() {
     // Replace the first 4 random bits with the constant FID header of 0b0111.
     fid[0] = 0b01110000 + (fid[0] % 0b00010000)
 
-    return fid.toString('base64')
+    // A FID has to match /^[cdef][\w-]{21}$/: base64url, and exactly 22 chars.
+    // Plain base64 would leave '+' and '/' in it, which breaks the FID once it
+    // is used as a path segment (see refreshFCMInstallationToken). Drop the
+    // 23rd character, which only carries the extra 4 bits of the 17th byte.
+    return encodeBase64URL(fid.toString('base64')).substring(0, 22)
 }
 
-function encodeBase64URL(value: string): string {
-    return String(value).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
-}
-
-// The installation auth token is only valid for 7 days, so it has to be
-// refreshed before it can be used for another FCM registration. Refresh a bit
-// early so a token that is about to expire is not sent with the next request.
+// The installation auth token is only valid for 7 days. Refresh a bit early so
+// a token that is about to expire is not handed out as still valid.
 const INSTALLATION_REFRESH_MARGIN = 60 * 60 * 1000 // in ms
 
 export function isInstallationTokenExpired(installation: Types.InstallationData, margin = INSTALLATION_REFRESH_MARGIN): boolean {
@@ -41,8 +44,10 @@ export function isInstallationTokenExpired(installation: Types.InstallationData,
 export async function refreshFCMInstallationToken(installation: Types.InstallationData, config: Types.ClientConfig): Promise<Types.InstallationData> {
     // The FIS endpoint for this is projects/<projectId>/installations/<fid>/authTokens:generate.
     // Omitting the `installations/` segment is what made the previous
-    // implementation fail with a 404 (see #27).
-    const response = await request(getEndpoint(config, FCM_INSTALLATION, `installations/${installation.fid}/authTokens:generate`), {
+    // implementation fail with a 404 (see #27). The FID is encoded because it is
+    // not known whether FIS echoed back the malformed FIDs this client sent
+    // before the base64url fix, and '+' or '/' in a path segment would 404 too.
+    const response = await request(getEndpoint(config, FCM_INSTALLATION, `installations/${encodeURIComponent(installation.fid)}/authTokens:generate`), {
         method: 'POST',
         headers: {
             Authorization: `${AUTH_VERSION} ${installation.refreshToken}`,
@@ -58,6 +63,12 @@ export async function refreshFCMInstallationToken(installation: Types.Installati
     })
 
     const data = await response.json() as Types.FcmInstallationAuthTokenResponse
+
+    // Without this the caller would persist `token: undefined` over a token that
+    // is merely expired, and broadcast it as a credentials change.
+    if (!data.token || !data.expiresIn) {
+        throw new Error('FCM installation token refresh returned no token')
+    }
 
     return {
         ...installation,

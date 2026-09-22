@@ -197,8 +197,9 @@ export default class PushReceiver extends Emitter<ClientEvents> {
     }
 
     // Persisted credentials keep working for MCS, but their installation auth
-    // token expires after 7 days. Refresh it so a later registration call does
-    // not fail with an expired token.
+    // token expires after 7 days. Nothing in here consumes it yet (a fresh
+    // registration always installs a new one), so this keeps it valid for
+    // consumers that read it out of the credentials we hand them.
     async #refreshInstallationIfNeeded(credentials: Types.Credentials): Promise<Types.Credentials> {
         if (!isInstallationTokenExpired(credentials.fcm.installation)) {
             return credentials
@@ -226,7 +227,7 @@ export default class PushReceiver extends Emitter<ClientEvents> {
             return newCredentials
         } catch (error) {
             // Keep the existing credentials: they are still usable for
-            // receiving messages, only a re-registration would fail.
+            // receiving messages, and connecting must not depend on FIS.
             Logger.warn('Failed to refresh FCM installation token', error)
 
             return credentials
