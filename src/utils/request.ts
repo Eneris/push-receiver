@@ -13,29 +13,40 @@ export default function requestWithRety(url: string, options?: globalThis.Reques
 }
 
 async function retry(retryCount = 0, url: string, options?: globalThis.RequestInit, maxRetries = 3): Promise<Response> {
+    let response: Response
+
     try {
-        return await fetch(url, options)
-            .then(async (response) => { // Serer responded
-                if (response.ok) return response
-
-                // Response not ok. This means server responded but with an error. We retry with increased retry count
-                const timeout = Math.min(retryCount * RETRY_STEP, MAX_RETRY_TIMEOUT)
-
-                Logger.debug(`Request failed : ${response.statusText}`)
-                Logger.debug(`Retrying in ${timeout} seconds`)
-
-                if (retryCount >= maxRetries) throw response.statusText
-
-                await delay(timeout * 1000)
-
-                return retry(retryCount + 1, url, options)
-            })
+        // Only the fetch call itself belongs inside the try. Anything thrown
+        // below has to reach the caller: catching it here would turn an
+        // exhausted HTTP failure into a "network error" and restart the loop
+        // without ever increasing retryCount, so the request would never
+        // settle.
+        response = await fetch(url, options)
     } catch {
         Logger.debug('Request failed with network error. Wait 10s and retry')
         // Fetch throws only for network errors. In that case we wait a bit and retry without increasing the count
         await delay(10_000) // 10 seconds
-        return retry(retryCount, url, options)
+
+        return retry(retryCount, url, options, maxRetries)
     }
+
+    // Server responded
+    if (response.ok) return response
+
+    Logger.debug(`Request failed : ${response.statusText}`)
+
+    // Response not ok. This means server responded but with an error. We retry with increased retry count
+    if (retryCount >= maxRetries) {
+        throw new Error(`Request to ${url} failed after ${maxRetries + 1} attempts: ${response.status} ${response.statusText}`)
+    }
+
+    const timeout = Math.min(retryCount * RETRY_STEP, MAX_RETRY_TIMEOUT)
+
+    Logger.debug(`Retrying in ${timeout} seconds`)
+
+    await delay(timeout * 1000)
+
+    return retry(retryCount + 1, url, options, maxRetries)
 }
 
 export const getEndpoint = (config: ClientConfig, baseUrl: string, path = '') => (
