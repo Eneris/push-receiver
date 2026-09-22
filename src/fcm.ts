@@ -24,10 +24,9 @@ function generateFirebaseFID() {
     // Replace the first 4 random bits with the constant FID header of 0b0111.
     fid[0] = 0b01110000 + (fid[0] % 0b00010000)
 
-    // A FID has to match /^[cdef][\w-]{21}$/: base64url, and exactly 22 chars.
-    // Plain base64 would leave '+' and '/' in it, which breaks the FID once it
-    // is used as a path segment (see refreshFCMInstallationToken). Drop the
-    // 23rd character, which only carries the extra 4 bits of the 17th byte.
+    // Firebase requires a FID to match /^[cdef][\w-]{21}$/, so base64url and
+    // exactly 22 characters. Drop the 23rd, which only carries the extra 4 bits
+    // of the 17th byte.
     return encodeBase64URL(fid.toString('base64')).substring(0, 22)
 }
 
@@ -64,17 +63,20 @@ export async function refreshFCMInstallationToken(installation: Types.Installati
 
     const data = await response.json() as Types.FcmInstallationAuthTokenResponse
 
-    // Without this the caller would persist `token: undefined` over a token that
-    // is merely expired, and broadcast it as a credentials change.
-    if (!data.token || !data.expiresIn) {
-        throw new Error('FCM installation token refresh returned no token')
+    // FIS sends expiresIn as a duration string, '604800s'.
+    const expiresIn = Number.parseInt(data.expiresIn) * 1000 // in ms
+
+    // Without this the caller would persist an undefined token over one that is
+    // merely expired, and broadcast it as a credentials change.
+    if (!data.token || !Number.isFinite(expiresIn)) {
+        throw new Error(`FCM installation token refresh returned an unusable response (token ${data.token ? 'present' : 'missing'}, expiresIn ${data.expiresIn})`)
     }
 
     return {
         ...installation,
         token: data.token,
         createdAt: (new Date()).getTime(), // in ms
-        expiresIn: Number.parseInt(data.expiresIn) * 1000, // in ms
+        expiresIn,
     }
 }
 
