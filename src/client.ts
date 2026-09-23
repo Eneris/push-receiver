@@ -58,7 +58,6 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         super()
 
         this.setDebug(config.debug)
-        Logger.debug('constructor', config)
 
         this.#config = {
             bundleId: 'receiver.push.com',
