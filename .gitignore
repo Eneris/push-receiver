@@ -13,3 +13,4 @@ src/protos.d.ts
 *.tsbuildinfo
 yarn-error.log
 tests
+.claude

@@ -6,8 +6,10 @@
     "types": "dist/index.d.ts",
     "files": [
         "dist",
-        "package*",
-        "*.md"
+        "package.json",
+        "README.md",
+        "CHANGELOG.md",
+        "LICENSE"
     ],
     "scripts": {
         "protos:convert": "yarn pbjs -t static-module --force-long --wrap commonjs -o ./src/protos.js ./src/protos/*.proto",
