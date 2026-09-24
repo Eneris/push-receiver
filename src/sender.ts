@@ -64,7 +64,8 @@ export default class PushSender {
     }
 
     async #getAccessToken(): Promise<GoogleOAuthAccessToken> {
-        if (this.#accessToken && this.#accessToken.generated_at + this.#accessToken.expires_in > new Date().getTime()) return this.#accessToken;
+        // expires_in is in seconds, generated_at in ms. Refresh a minute early so a token about to expire is not reused.
+        if (this.#accessToken && this.#accessToken.generated_at + (this.#accessToken.expires_in - 60) * 1000 > new Date().getTime()) return this.#accessToken;
         
         const token = this.#createAuthJwt();
 
