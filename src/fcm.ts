@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { gunzipSync } from 'node:zlib'
 import request, { getEndpoint } from './utils/request'
 
 import type * as Types from './types'
@@ -11,6 +12,15 @@ const SDK_VERSION = 'w:0.6.6'
 
 // TODO: FIXME it is optional to send it but better to implement proper heatbeat in the future
 const getEmptyHeatbeat = () => btoa(JSON.stringify({ heartbeats: [], version: 2 })).toString()
+async function parseJsonResponse<T>(response: Response): Promise<T> {
+    let body = Buffer.from(await response.arrayBuffer())
+
+    if (body.length >= 2 && body[0] === 0x1f && body[1] === 0x8b) {
+        body = gunzipSync(body)
+    }
+
+    return JSON.parse(body.toString('utf8')) as T
+}
 
 function encodeBase64URL(value: string): string {
     return String(value).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
@@ -61,7 +71,7 @@ export async function refreshFCMInstallationToken(installation: Types.Installati
         })
     })
 
-    const data = await response.json() as Types.FcmInstallationAuthTokenResponse
+    const data = await parseJsonResponse<Types.FcmInstallationAuthTokenResponse>(response)
 
     // FIS sends expiresIn as a duration string, '604800s'.
     const expiresIn = Number.parseInt(data.expiresIn) * 1000 // in ms
@@ -95,7 +105,7 @@ export async function installFCM(config: Types.ClientConfig): Promise<Types.Inst
         }),
     })
 
-    const data = await response.json() as Types.FcmInstallationResponse
+    const data = await parseJsonResponse<Types.FcmInstallationResponse>(response)
 
     return {
         token: data.authToken.token,
@@ -134,7 +144,7 @@ export async function registerFCM(gcmData: Types.GcmData, installation: Types.In
 
     const response = await request(getEndpoint(config, FCM_REGISTRATION, 'registrations'), requestOptions)
 
-    const data = await response.json()
+    const data = await parseJsonResponse<any>(response)
 
     if (data.error) {
         throw new Error('FCM registration failed... ' + data.error.message)

@@ -1,5 +1,6 @@
 import Long from 'long'
 import { randomUUID } from 'crypto'
+import { gunzipSync } from 'node:zlib'
 import request from './utils/request'
 import delay from './utils/timeout'
 import Protos from './protos'
@@ -30,8 +31,14 @@ export async function checkIn(config: Types.ClientConfig): Promise<Types.GcmChec
     })).arrayBuffer()
 
 
+    let checkinBody = Buffer.from(body)
+
+    if (checkinBody.length >= 2 && checkinBody[0] === 0x1f && checkinBody[1] === 0x8b) {
+        checkinBody = gunzipSync(checkinBody)
+    }
+
     const AndroidCheckinResponse = Protos.checkin_proto.AndroidCheckinResponse
-    const message = AndroidCheckinResponse.decode(new Uint8Array(body))
+    const message = AndroidCheckinResponse.decode(checkinBody)
     const object = AndroidCheckinResponse.toObject(message, {
         longs: String,
         enums: String,
