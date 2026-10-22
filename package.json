@@ -19,6 +19,7 @@
         "build": "yarn protos:build && yarn tsc && yarn protos:copy",
         "prepublish": "yarn build",
         "lint": "yarn eslint 'src/**/*.ts'",
+        "test": "yarn build && node --test test/*.test.cjs",
         "precommit": "yarn lint && yarn build",
         "prepare": "yarn prepublish"
     },

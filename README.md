@@ -2,6 +2,30 @@
 
 A library to subscribe to GCM/FCM and receive notifications within a node process.
 
+## Receiving queued messages
+
+The receiver acknowledges MCS transport receipt independently of notification
+decryption and application callbacks. It sends a stream acknowledgement after
+ten data packets, when requested by the server, or after one second for a partial
+batch. Heartbeats can carry the same cumulative acknowledgement.
+
+`persistentIds` remains the notification deduplication history. Current IDs are
+included in reconnect logins, including when a previous acknowledgement may have
+been lost. Persist IDs in your application if you need deduplication across
+process restarts.
+
+A payload-free Google `deleted_messages` control produces a warning instead of
+being treated as encrypted notification data. It means queued events were lost;
+applications may need to refresh state from their service. Acknowledgements
+cannot recover events that Google has already deleted.
+
+## Development checks
+
+With the project's Yarn toolchain installed, run `yarn install --immutable`,
+`yarn lint` and `yarn test`. Tests build the package and exercise real protobuf
+frames and encrypted synthetic messages with a fake socket and clock. They do
+not connect to Google or require credentials.
+
 ## When should I use `push-receiver` ?
 
 - I want to **receive** push notifications sent using Firebase Cloud Messaging in an [electron](https://github.com/electron/electron) desktop application.
