@@ -26,6 +26,9 @@ ProtobufJS.configure()
 const HOST = 'mtalk.google.com'
 const PORT = 5228
 const MAX_RETRY_TIMEOUT = 15
+const STREAM_ACK_EXTENSION_ID = 13
+const STREAM_ACK_BATCH_SIZE = 10
+const STREAM_ACK_DELAY_MS = 1000
 
 interface ClientEvents {
     ON_MESSAGE_RECEIVED: (data: Types.MessageEnvelope) => void
@@ -46,6 +49,8 @@ export default class PushReceiver extends Emitter<ClientEvents> {
     #heartbeatTimeout?: NodeJS.Timeout
     #streamId = 0
     #lastStreamIdReported = -1
+    #unackedDataCount = 0
+    #ackTimer?: NodeJS.Timeout
     #ready = defer()
 
     persistentIds: Types.PersistentId[]
@@ -99,7 +104,9 @@ export default class PushReceiver extends Emitter<ClientEvents> {
 
         Logger.debug('connect')
 
+        this.#streamId = 0
         this.#lastStreamIdReported = -1
+        this.#unackedDataCount = 0
 
         this.#socket = new tls.TLSSocket(null)
         // Probe after 30s idle instead of the OS default (7200s on Linux).
@@ -131,6 +138,7 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         this.#clearReady();
 
         clearTimeout(this.#retryTimeout)
+        this.#clearAckTimer()
         this.#clearHeartbeat()
 
         if (this.#socket) {
@@ -281,9 +289,30 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         this.#retryTimeout = setTimeout(() => this.connect(), timeout)
     }
 
-    #getStreamId(): number {
-        this.#lastStreamIdReported = this.#streamId
-        return this.#streamId
+    #clearAckTimer() {
+        clearTimeout(this.#ackTimer)
+        this.#ackTimer = undefined
+    }
+
+    #writeAcknowledgement(tag: MCSProtoTag, buffer: Uint8Array, streamId?: number) {
+        if (!this.#socket) return
+
+        try {
+            // A false return means backpressure, not failure: the bytes are queued.
+            this.#socket.write(Buffer.concat([Buffer.from([tag]), buffer]))
+        } catch (error) {
+            Logger.error('Failed to send push acknowledgement', error)
+            this.#socketRetry()
+            return
+        }
+
+        // Commit only after the write accepts the packet. Keep persistent IDs
+        // for reconnect in case the socket fails before the server receives it.
+        if (streamId !== undefined) {
+            this.#lastStreamIdReported = streamId
+            this.#unackedDataCount = 0
+            this.#clearAckTimer()
+        }
     }
 
     #newStreamIdAvailable(): boolean {
@@ -291,13 +320,11 @@ export default class PushReceiver extends Emitter<ClientEvents> {
     }
 
     #sendHeartbeatPing() {
-        const heartbeatPingRequest: Record<string, unknown> = {}
+        const heartbeatPingRequest: mcs_proto.IHeartbeatPing = {}
 
         if (this.#newStreamIdAvailable()) {
-            heartbeatPingRequest.last_stream_id_received = this.#getStreamId()
+            heartbeatPingRequest.lastStreamIdReceived = this.#streamId
         }
-
-        Logger.debug('Heartbeat send pong', heartbeatPingRequest)
 
         const HeartbeatPingRequestType = Protos.mcs_proto.HeartbeatPing
         const errorMessage = HeartbeatPingRequestType.verify(heartbeatPingRequest)
@@ -310,24 +337,20 @@ export default class PushReceiver extends Emitter<ClientEvents> {
 
         Logger.debug('HEARTBEAT sending PING', heartbeatPingRequest)
 
-        this.#socket.write(Buffer.concat([
-            Buffer.from([MCSProtoTag.kHeartbeatPingTag]),
-            buffer,
-        ]))
+        this.#writeAcknowledgement(MCSProtoTag.kHeartbeatPingTag, buffer, heartbeatPingRequest.lastStreamIdReceived)
     }
 
     #sendHeartbeatPong(object) {
-        const heartbeatAckRequest: Record<string, any> = {}
+        const heartbeatAckRequest: mcs_proto.IHeartbeatAck = {}
 
         if (this.#newStreamIdAvailable()) {
-            heartbeatAckRequest.last_stream_id_received = this.#getStreamId()
+            heartbeatAckRequest.lastStreamIdReceived = this.#streamId
         }
 
-        if (object?.status) {
-            heartbeatAckRequest.status = object.status
+        if (object?.status !== undefined) {
+            // Parser emits int64 fields as strings; preserve all bits and zero.
+            heartbeatAckRequest.status = Long.fromValue(object.status)
         }
-
-        Logger.debug('Heartbeat send pong', heartbeatAckRequest)
 
         const HeartbeatAckRequestType = Protos.mcs_proto.HeartbeatAck
         const errorMessage = HeartbeatAckRequestType.verify(heartbeatAckRequest)
@@ -339,10 +362,41 @@ export default class PushReceiver extends Emitter<ClientEvents> {
 
         Logger.debug('HEARTBEAT sending PONG', heartbeatAckRequest)
 
-        this.#socket.write(Buffer.concat([
-            Buffer.from([MCSProtoTag.kHeartbeatAckTag]),
-            buffer
-        ]))
+        this.#writeAcknowledgement(MCSProtoTag.kHeartbeatAckTag, buffer, heartbeatAckRequest.lastStreamIdReceived)
+    }
+
+    #sendStreamAck() {
+        if (!this.#socket || !this.#unackedDataCount) return
+
+        // MCS stream ACK: IQ SET with extension 13 and a cumulative receive ID.
+        const IqStanza = Protos.mcs_proto.IqStanza
+        const acknowledgement: mcs_proto.IIqStanza = {
+            type: IqStanza.IqType.SET,
+            id: '',
+            extension: { id: STREAM_ACK_EXTENSION_ID, data: Buffer.alloc(0) },
+            lastStreamIdReceived: this.#streamId,
+        }
+        const errorMessage = IqStanza.verify(acknowledgement)
+        if (errorMessage) throw new Error(errorMessage)
+
+        this.#writeAcknowledgement(
+            MCSProtoTag.kIqStanzaTag,
+            IqStanza.encodeDelimited(acknowledgement).finish(),
+            acknowledgement.lastStreamIdReceived,
+        )
+    }
+
+    #acknowledgeDataMessage(object: mcs_proto.IDataMessageStanza) {
+        this.#unackedDataCount++
+        if (object.immediateAck || this.#unackedDataCount >= STREAM_ACK_BATCH_SIZE) {
+            this.#sendStreamAck()
+        } else if (!this.#ackTimer) {
+            // Flush short bursts without waiting for the next heartbeat.
+            this.#ackTimer = setTimeout(() => {
+                this.#ackTimer = undefined
+                this.#sendStreamAck()
+            }, STREAM_ACK_DELAY_MS)
+        }
     }
 
     #sendLogin() {
@@ -362,8 +416,8 @@ export default class PushReceiver extends Emitter<ClientEvents> {
             useRmq2: true,
             setting: [{ name: 'new_vc', value: '1' }],
             clientEvent: [],
-            // Id of the last notification received
-            receivedPersistentId: this.#config.persistentIds,
+            // Include IDs received since earlier logins, not a stale config array.
+            receivedPersistentId: this.persistentIds,
         }
 
         if (this.#config.heartbeatIntervalMs) {
@@ -388,19 +442,22 @@ export default class PushReceiver extends Emitter<ClientEvents> {
     }
 
     #handleMessage = ({ tag, object }: Types.DataPacket): void => {
+        // Every incoming packet, including this one, contributes to stream ACKs.
+        this.#streamId++
         // any message will reset the client side heartbeat timeout.
         this.#startHeartbeat()
 
         switch (tag) {
             case MCSProtoTag.kLoginResponseTag:
-                // clear persistent ids, as we just sent them to the server while logging in
-                this.#config.persistentIds = []
+                // Retain the public ID history for deduplication and reconnects.
                 this.emit('ON_READY')
                 this.#startHeartbeat()
                 this.#ready.resolve()
                 break
 
             case MCSProtoTag.kDataMessageStanzaTag:
+                // Transport receipt does not depend on decryption or user callbacks.
+                this.#acknowledgeDataMessage(object)
                 this.#handleDataMessage(object)
                 break
 
@@ -435,12 +492,21 @@ export default class PushReceiver extends Emitter<ClientEvents> {
 
             // no default
         }
-
-        this.#streamId++
     }
 
     #handleDataMessage = (object): void => {
-        if (this.persistentIds.includes(object.persistentId)) {
+        if (object.persistentId && this.persistentIds.includes(object.persistentId)) {
+            return
+        }
+
+        // Google deletion controls have no encrypted body or encryption headers.
+        // Do not mistake a malformed/encrypted notification for this control.
+        const appData = object.appData || []
+        if (!object.rawData?.length &&
+            appData.some(item => item.key === 'message_type' && item.value === 'deleted_messages') &&
+            !appData.some(item => item.key === 'crypto-key' || item.key === 'encryption')) {
+            Logger.warn('Push server deleted queued notifications; some past events may be unavailable.')
+            if (object.persistentId) this.persistentIds.push(object.persistentId)
             return
         }
 
@@ -463,7 +529,7 @@ export default class PushReceiver extends Emitter<ClientEvents> {
         }
 
         // Maintain persistentIds updated with the very last received value
-        this.persistentIds.push(object.persistentId)
+        if (object.persistentId) this.persistentIds.push(object.persistentId)
         // Send notification
         this.emit('ON_MESSAGE_RECEIVED', {
             message,
